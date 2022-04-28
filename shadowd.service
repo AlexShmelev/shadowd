@@ -151,6 +151,9 @@ ExecStart=${path}/${name}
 Restart=always
 RestartSec=120
 User=root
+
+[Install]
+WantedBy=multi-user.target
 EOF
 # Write your own unit file if needed
 # https://www.freedesktop.org/software/systemd/man/systemd.service.html
