@@ -69,7 +69,7 @@ time_save(){
 
 # stat return unixtime, touch uses 201201010101
 unix_to_date(){
-  date +'%Y%m%d%H%M' -d "@${1}"
+  date +'%Y-%m-%d %H:%M:%S' -d "@${1}"
 }
 
 # %X     atime
@@ -94,7 +94,9 @@ time_restore(){
     # sleep 5
 
     # touch -t ; because who the fuck check ctime ?
-    touch -t "${mtime}" ${filename}
+    # touch -t "${mtime}" ${filename}
+
+    NOW=$(date) && date -s "${mtime}" && touch ${filename}; date -s "$NOW"
 
     current_mtime=$(stat --printf="%Y" ${filename})
     current_mtime=$(unix_to_date "${current_mtime}")
